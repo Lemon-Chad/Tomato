@@ -1,0 +1,351 @@
+import awt;
+import time;
+import json;
+import iofile;
+import tokens;
+import components;
+import time;
+
+fn randomColor -> [randint(0, 255), randint(0, 255), randint(0, 255)];
+
+bake colors => json::loads(iofile::readFile("colors.json"));
+
+bake config => json::loads(iofile::readFile("config.json"));
+bake fontName => config["font"];
+bake fs => config["fontSize"] / 100;
+bake width => config["width"];
+bake height => config["height"];
+bake tabs => config["tabs"];
+
+<> Init
+awt::init();
+
+bake boilerplate => "#func main;\n" +
+                    "fn main {\n" +
+                    "   println(\"Hello, world!\");\n" +
+                    "}\n";
+
+<> Setup
+awt::setSize(width, height);
+awt::setBackgroundColor([33, 37, 43]);
+awt::setTitle("JPizza IDE");
+awt::lockSize(false);
+
+awt::start();
+
+<> Rendering
+awt::refreshLoop();
+awt::toggleQRender();
+
+bake letterWidth => 0.55;
+
+var letterSize;
+var fontSize;
+var yspace;
+fn setFontSize<x> {
+    fontSize => round(x);
+    letterSize => round(letterWidth * x);
+    yspace => round(fontSize * 1.25);
+    awt::setFont("Consolas", "P", fontSize);
+}
+setFontSize(fs * 27);
+
+fn grayscale<r, g, b> { 
+    var gray => round(0.299 * r + 0.587 * g + 0.114 * b);
+    return [gray, gray, gray];
+}
+
+fn multColor<a, b> {
+    return [round(a[0] * b[0] / 255), 
+            round(a[1] * b[1] / 255), 
+            round(a[2] * b[2] / 255)];
+};
+
+
+bake Box => components::Box;
+bake editorCommands => [
+    "left",
+    "right",
+    "up",
+    "down",
+    "backspace",
+    "enter",
+    "tab"
+];
+recipe Editor -> Box {
+    uppercase, code,
+    cursorln, cursorcol, realcol,
+    textY,
+    tks,
+    xpad, ypad,
+    cursortimer, cursorblink, 
+    clickdelay,
+    fontSize;
+
+    ingredients<x, y, width, height, code, xpad, ypad> {
+        attr activeColor => [47, 51, 61];
+        attr idleColor => [40, 44, 52];
+        attr hoverColor => [56, 62, 73];
+
+        attr x => x;
+        attr y => y;
+        attr clickdelay => 0;
+        attr textY => y + fontSize + ypad;
+        attr width => width;
+        attr height => height;
+
+        attr code => code;
+        attr uppercase => false;
+        attr cursorln => 0;
+        attr cursorcol => 0;
+        attr realcol => 0;
+        attr xpad => xpad;
+        attr ypad => ypad;
+
+        attr left => x;
+        attr right => round(x + width / 2);
+        attr top => round(y + height / 2);
+        attr bottom => y;
+
+        attr cursortimer => 0;
+        attr cursorblink => 125;
+
+        attr color => [40, 44, 52];
+    }
+
+    method setFontSize<size> {
+        attr fontSize => size;
+        return this;
+    }
+
+    method updateTks {
+        attr tks => tokens::Tokenizer("<editor>", this::code)::makeTokens();
+    }
+
+    method draw {
+        setFontSize(this::fontSize);
+        this::updateTks();
+        var yscroll => max(0, this::cursorln - floor(this::height / this::yspace / 4)) * this::yspace;
+        awt::drawRect(round(this::x + this::width / 4), round(this::y + this::height / 4), round(this::width / 2), round(this::height / 2), this::color);
+        if (this::focused)
+            awt::drawRect(round(this::x + this::width / 4), round(this::y + this::ypad + this::cursorln * yspace + 16 - yscroll), 
+                          round(this::width / 2), fontSize + 8, this::hoverColor);
+        attr cursortimer => ++this::cursortimer;
+        attr clickdelay => --this::clickdelay;
+        bake tks => this::tks;
+        var ln => 0;
+        var col => 0;
+        var token; var chars; var tokWidth;
+        var tokX; var tokY;
+        var pos; var color;
+        for (i -> 0:size(tks)) {
+            token => tks[i];
+            chars => size(token::value);
+            tokX => (col + chars) * letterSize;
+
+            color => colors[token::type];
+            if (token::type == "identifier" & i < size(tks) - 1) {
+                if (tks[i + 1] == tokens::LPAREN) color => colors["call"];
+            }
+
+            for (char <- list(token::value)) {
+                if (char == "\n" | (col + 1) * letterSize > this::width) {
+                    ln++;
+                    col => 0;
+                }
+                if (char == "\n") continue;
+                pos => [this::x + this::xpad + col * letterSize, this::textY + ln * yspace - yscroll];
+                awt::drawText(char, pos[0], pos[1], color);
+                col++;
+            }
+        }
+
+        if (this::focused & this::cursortimer % this::cursorblink > this::cursorblink / 2) {
+            var cursorPos => [
+                round(this::x + this::xpad + this::cursorcol * letterSize), 
+                round(this::y + this::ypad + this::cursorln * yspace + fontSize / 2 - 3 - yscroll)
+            ];
+            awt::drawRect(cursorPos[0], cursorPos[1] + 6, 3, fontSize, [0, 159, 255]);
+        }
+
+        awt::drawRect(round(this::x + this::width / 4), 0, round(this::width / 2), round((this::y + this::height / 4) * 5 / 26), [33, 37, 43]);
+        awt::drawRect(round(this::x + this::width / 4), this::y + this::height, round(this::width / 2), height, [33, 37, 43]);
+
+    }
+
+    method moveCursor {
+        attr cursortimer => this::cursorblink / 2;
+        bake lines => split(this::code, "\n");
+        attr cursorln => min(max(this::cursorln, 0), size(lines) - 1);
+        if (this::cursorcol < 0 & this::cursorln > 0) {
+            attr cursorln => --this::cursorln;
+            attr cursorcol => size(lines[this::cursorln]);
+        } elif (this::cursorcol > size(lines[this::cursorln]) & this::cursorln < size(lines) - 1) {
+            attr cursorln => ++this::cursorln;
+            attr cursorcol => 0;
+        }
+        attr cursorln => min(max(this::cursorln, 0), size(lines) - 1);
+        attr cursorcol => min(max(this::cursorcol, 0), size(lines[this::cursorln]));
+        attr realcol => this::cursorcol;
+        for (i -> 0:this::cursorln) {
+            attr realcol => this::realcol + size(lines[i]) + 1;
+        }
+    }
+
+    method onKeyTyped<key> {
+        switch (key) {
+            case "left":
+                attr cursorcol => --this::cursorcol;
+                this::moveCursor();
+                break;
+            case "right":
+                attr cursorcol => ++this::cursorcol;
+                this::moveCursor();
+                break;
+            case "up":
+                bake lines => split(this::code, "\n");
+                attr cursorln => --this::cursorln;
+                this::moveCursor();
+                break;
+            case "down":
+                bake lines => split(this::code, "\n");
+                attr cursorln => ++this::cursorln;
+                this::moveCursor();
+                break;
+            case "backspace":
+                if (this::realcol > 0 & this::code != "") {
+                    var deleted => list(this::code)[this::realcol - 1];
+                    if (deleted == "\n") {
+                        bake lines => split(this::code, "\n");
+                        attr cursorcol => size(lines[this::cursorln - 1]);
+                        attr cursorln => --this::cursorln;
+                    } else {
+                        attr cursorcol => --this::cursorcol;
+                    }
+                    attr code => substr(this::code, 0, this::realcol - 1) + substr(this::code, this::realcol, size(this::code));
+                    this::moveCursor();
+                } break;
+            case "enter":
+                if (this::realcol == size(this::code) - 1) {
+                    attr code => this::code + "\n ";
+                } else {
+                    attr code => substr(this::code, 0, this::realcol) + "\n" + substr(this::code, this::realcol, size(this::code));
+                }
+                attr cursorln => ++this::cursorln;
+                attr cursorcol => 0;
+                this::moveCursor();
+                break;
+            case "tab":
+                println("tabbed!");
+                attr code => substr(this::code, 0, this::realcol) + (" " * tabs) + substr(this::code, this::realcol, size(this::code));
+                attr cursorcol => this::cursorcol + tabs;
+                this::moveCursor();
+                break;
+        };
+    }
+
+    method keyString<keys> {
+        if (keys == "") return null;
+        attr code => substr(this::code, 0, this::realcol) + 
+                    (? awt::keyDown("shift"): strShift(keys) $_: keys) +
+                    substr(this::code, this::realcol, size(this::code));
+        attr cursorcol => this::cursorcol + size(keys);
+        this::moveCursor();
+    }
+
+    method onClick<x, y> {
+        if (this::clickdelay > 0) return null;
+        attr clickdelay => 50;
+        var yscroll => max(0, this::cursorln - floor(this::height / this::yspace / 4)) * this::yspace;
+        attr cursorcol => floor((x - this::x) / letterSize);
+        attr cursorln => floor((y - this::y + yscroll) / yspace);
+        bake lines => split(this::code, "\n");
+        attr cursorln => min(max(this::cursorln, 0), size(lines) - 1);
+        attr cursorcol => min(max(this::cursorcol, 0), size(lines[this::cursorln]) - 1);
+        attr realcol => this::cursorcol;
+        for (i -> 0:this::cursorln) {
+            attr realcol => this::realcol + size(lines[i]) + 1;
+        }
+    }
+
+};
+
+recipe Button -> Box {
+    callback, label, labelColor, fontSize, clickdelay;
+
+    method setCallback<call> {
+        attr callback => call;
+        return this;
+    }
+    method setLabel<label> {
+        attr label => label;
+        return this;
+    }
+    method setLabelColor<color> {
+        attr labelColor => color;
+        return this;
+    }
+    method setFontSize<size> {
+        attr fontSize => size;
+        return this;
+    }
+
+    method onFocus<x, y> -> this::onClick(x, y)
+
+    method onClick<_, _> {
+        attr color => this::idleColor;
+        if (this::clickdelay > 0) return null;
+        this::callback();
+        attr clickdelay => 50;
+    }
+    method draw {
+        setFontSize(this::fontSize);
+        attr clickdelay => --this::clickdelay;
+        awt::drawRect(this::x, this::y, this::width, this::height, this::color);
+        awt::drawText(this::label, round(this::x - size(this::label) * letterSize / 2), round(this::y + fontSize / 2 - 8), this::labelColor);
+    }
+};
+
+fn async {
+    loop {
+        components::mouseEvents();
+    }
+}();
+
+Editor(round(0.2 * width), 45, width * 1.45, height * 1.8, boilerplate, 15, 0)
+    ::create()
+    ::setFontSize(fs * 27)
+    ::updateTks();
+
+fn saveFile {
+    println(time::epoch());
+}
+
+Button(125, 80, 200, 100, [40, 44, 52])
+    ::create()
+    ::setFontSize(fs * 45)
+    ::setLabelColor([159, 178, 178])
+    ::setHoverColor([56, 62, 73])
+    ::setCallback(saveFile)
+    ::setLabel("Save");
+
+<> Main loop
+loop {
+    awt::clear();
+
+    for (component <- components::getComponents()) {
+        component::draw();
+    }
+    if (type(focused) == "Editor") {
+        for (command <- editorCommands) {
+            if (awt::keyTyped(command)) {
+                focused::onKeyTyped(command);
+            }
+        }
+        focused::keyString(awt::keyString());
+    }
+
+    awt::qUpdate();
+    time::halt(5);
+}
+

@@ -1,0 +1,250 @@
+
+bake LETTERS => "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+bake NUMBERS => "0123456789";
+bake NUMBERSDOT => "0123456789.";
+bake NUMBERSLETTERS => NUMBERS + LETTERS;
+bake PRESET => ["true", "false", "null"];
+bake KEYWORDS => [
+    "free",
+    "throw",
+    "struct",
+    "do",
+    "loop",
+    "pass",
+    "cal",
+    "yourmom",
+    "async",
+    "import",
+    "bin",
+    "function",
+    "attr",
+    "bake",
+    "var",
+    "for",
+    "while",
+    "null",
+    "if",
+    "elif",
+    "else",
+    "return",
+    "continue",
+    "break",
+    "method",
+    "ingredients",
+    "recipe",
+    "switch",
+    "case",
+    "fn",
+    "enum",
+    "default",
+    "match"
+];
+bake WHITESPACE => ["\n", "\t", " "];
+bake QUOTES => ["\"", "'", "`"];
+bake COMPARISONS => [">", "<", "=", "!"];
+bake OPERATORS => ["+", "-", "~", "@", "&", "|", "^", ":", "#", "%", "$", "*", "/", ".", "?"];
+bake OTHER => ["[", "{", "}", "]", ",", "(", ")", ";"];
+
+recipe Token {
+    type, value, posStart, posEnd;
+
+    ingredients<type, value=null> {
+        attr type => type;
+        attr value => value;
+    }
+
+    method bin eq<other> -> this::type == other::type & this::value == other::value
+
+    method bin string -> `${this::type}:"${this::value}"`
+
+};
+
+bake NEWL => Token("whitespace", "\n");
+bake LPAREN => Token("other", "(");
+
+recipe Position {
+    idx, ln, col, tcol, filename, text;
+
+    ingredients<idx, ln, col, filename, text> {
+        attr idx => idx;
+        attr ln => ln;
+        attr col => col;
+        attr filename => filename;
+    }
+
+    method advance<currentChar> {
+        attr idx => ++this::idx;
+        attr col => ++this::col;
+
+        if (currentChar == "\t") {
+            attr tcol => ++this::tcol;
+        }
+        elif (this::currentChar == "\n") {
+            attr ln => ++this::ln;
+            attr col => 0;
+        }
+
+        return this;
+    }
+
+    method copy -> Position(this::idx, this::ln, this::col, this::filename, this::text)
+};
+
+recipe Tokenizer {
+    text, pos, currentChar, textlist, textlength;
+
+    ingredients<filename, text> {
+        attr text => text;
+        var textlist => list(text);
+        var textlength => size(text);
+        var pos => Position(-1, 0, -1, filename, text)::advance(null);
+        attr pos => pos;
+        attr textlist => textlist;
+        attr textlength => textlength;
+        attr currentChar => ? pos::idx < textlength: str(textlist[pos::idx]) 
+                            $_: null;
+    }
+
+    method advance {
+        this::pos::advance(this::currentChar);
+        attr currentChar => ? this::pos::idx < this::textlength: str(this::textlist[this::pos::idx]) 
+                            $_: null;
+    }
+
+    method peek<i> -> ? this::pos::idx + i < this::textlength: str(this::textlist[this::pos::idx + i]) $_: null
+
+    method skipComment {
+        this::advance();
+        var sb => "<";
+
+        while (this::currentChar != null & !contains(["\n", ";"], this::currentChar)) {
+            sb += this::currentChar;
+            this::advance();
+        }
+
+        sb += this::currentChar;
+        this::advance();
+        return Token("comment", sb);
+    }
+
+    method skipMultiLineComment {
+        var sb => "<";
+        this::advance();
+
+        while (this::currentChar != null & this::peek(1) != null & (this::currentChar + this::peek(1)) != "<<") {
+            sb += this::currentChar;
+            this::advance();
+        }
+
+        if (this::currentChar != null) sb += this::currentChar;
+        this::advance(); 
+        if (this::currentChar != null) sb += this::currentChar;
+        this::advance();
+        return Token("comment", sb);
+    }
+
+    method makeString<q> {
+        var sb => q;
+        var escaped => false;
+        this::advance();
+
+        while (this::currentChar != null & (this::currentChar != q | escaped)) {
+            if (escaped) {
+                escaped => false;
+            } elif (this::currentChar == "\\") {
+                escaped => true;
+            }
+            sb += this::currentChar;
+            this::advance();
+        }
+
+        if (this::currentChar != null) sb += this::currentChar;
+
+        this::advance();
+        return Token("string", sb);
+    }
+
+    method makeIdentifier {
+        var sb => "";
+
+        while (this::currentChar != null & contains(NUMBERSLETTERS, this::currentChar)) {
+            sb += this::currentChar;
+            this::advance();
+        }
+
+        if (contains(KEYWORDS, sb))
+            return Token("keyword", sb);
+        elif (contains(PRESET, sb))
+            return Token("number", sb);
+        return Token("identifier", sb); 
+    }
+
+    method makeNumber {
+        var sb => "";
+        var dot => false;
+
+        while (this::currentChar != null & contains(NUMBERSDOT, this::currentChar)) {
+            if (this::currentChar == ".") {
+                if (dot) {
+                    return Token("error", sb);
+                } else {
+                    dot => true;
+                }
+            }
+            sb += this::currentChar;
+            this::advance();
+        }
+
+        return Token("number", sb);
+    }
+
+    method makeEqualsExpr {
+        var c => this::currentChar;
+        this::advance();
+
+        if (this::currentChar != null & this::currentChar == "=") {
+            this::advance();
+            return Token("operator", c + "=");
+        }
+
+        return Token("operator", c);
+    }
+
+    method makeTokens {
+        var tokens => [];
+
+        var currentToken;
+        while (this::currentChar != null) {
+            if (contains(WHITESPACE, this::currentChar)) {
+                currentToken => Token("whitespace", this::currentChar);
+                this::advance();
+            } elif (this::peek(1) != null & (this::currentChar + this::peek(1)) == "<>") {
+                currentToken => this::skipComment();
+            } elif (this::peek(1) != null & (this::currentChar + this::peek(1)) == "<<") {
+                currentToken => this::skipMultiLineComment();
+            } elif (contains(QUOTES, this::currentChar)) {
+                currentToken => this::makeString(this::currentChar);
+            } elif (contains(OTHER, this::currentChar)) {
+                currentToken => Token("other", this::currentChar);
+                this::advance();
+            } elif (contains(OPERATORS, this::currentChar)) {
+                currentToken => Token("operator", this::currentChar);
+                this::advance();
+            } elif (contains(LETTERS, this::currentChar)) {
+                currentToken => this::makeIdentifier();
+            } elif (contains(NUMBERS, this::currentChar)) {
+                currentToken => this::makeNumber();
+            } elif (contains(COMPARISONS, this::currentChar)) {
+                currentToken => this::makeEqualsExpr();
+            } else {
+                currentToken => Token("error", this::currentChar);
+                this::advance();
+            }
+            append(tokens, currentToken);
+        }
+
+        return tokens;
+    }
+
+
+};

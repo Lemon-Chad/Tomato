@@ -1,0 +1,142 @@
+
+var comps => [];
+var focused => null;
+
+fn getComponents -> comps;
+
+fn mouseEvents {
+    bake clicked => awt::mouseDown(0);
+    bake mouse => awt::mousePos();
+    bake mouseX => mouse[0]; bake mouseY => mouse[1];
+
+    if (clicked & focused != null) {
+        if (!focused::isClicked(mouseX, mouseY)) {
+            focused::_onUnfocus(mouseX, mouseY);
+            focused => null;
+        } else {
+            focused::onClick(mouseX, mouseY);
+        }
+    }
+
+    var hovered;
+    for (component <- comps) {
+        if (component == focused) continue;
+
+        hovered => component::isHovered(mouseX, mouseY);
+        if (!component::hovered & hovered) {
+            component::_onHover(mouseX, mouseY);
+        } elif (component::hovered & !hovered) {
+            component::_onUnhover(mouseX, mouseY);
+        }
+        if (clicked & component::isClicked(mouseX, mouseY)) {
+            focused => component;
+            focused::_onFocus(mouseX, mouseY);
+            break;
+        }
+    }
+}
+
+fn getFocused -> focused;
+
+recipe Component {
+    hovered, focused;
+
+    method create {
+        attr hovered => false;
+        attr focused => false;
+        append(comps, this);
+        return this;
+    }
+
+    method isClicked<x, y> -> false
+    method isHovered<x, y> -> false
+
+    method _onHover<x, y> {
+        attr hovered => true;
+        this::onHover(x, y);
+    }
+    method _onUnhover<x, y> { 
+        attr hovered => false;
+        this::onUnhover(x, y);
+    }
+    method _onFocus<x, y> {
+        attr focused => true;
+        this::onFocus(x, y);
+    }
+    method _onUnfocus<x, y> {
+        attr focused => false;
+        this::onUnfocus(x, y);
+    }
+
+    method onHover<x, y> -> null
+    method onUnhover<x, y> -> null
+    method onClick<x, y> -> null
+
+    method onFocus<x, y> -> null
+    method onUnfocus<x, y> -> null
+
+    method draw -> null
+
+    method keyString<keys> -> null
+    method onKeyDown<key> -> null
+    method onKeyTyped<key> -> null
+
+};
+
+recipe Box -> Component {
+    x, y, 
+    width, height,
+    left, right, top, bottom,
+    activeColor, hoverColor, idleColor,
+    color;
+
+    ingredients<x, y, width, height, color> {
+        attr x => x;
+        attr y => y;
+
+        attr width => width;
+        attr height => height;
+
+        attr left => x - width / 2;
+        attr right => x + width / 2;
+        attr top => y + height / 2;
+        attr bottom => y - height / 2;
+
+        attr activeColor => color;
+        attr hoverColor => color;
+        attr idleColor => color;
+        attr color => color;
+    }
+
+    method setActiveColor<color> { 
+        attr activeColor => color; 
+        return this;
+    }
+
+    method setHoverColor<color> { 
+        attr hoverColor => color;
+        return this;
+    }
+
+    method isClicked<x, y> -> this::isHovered(x, y)
+    method isHovered<x, y> -> this::left < x & this::right > x & this::bottom < y & this::top > y
+
+    method onHover<x, y> {
+        if (!this::focused) 
+            attr color => this::hoverColor;
+    }
+    method onUnhover<x, y> { 
+        if (!this::focused) 
+            attr color => this::idleColor;
+    }
+
+    method onFocus<x, y> {
+        attr color => this::activeColor;
+    }
+    method onUnfocus<x, y> {
+        attr color => this::idleColor;
+    }
+
+    method draw -> awt::drawRect(this::x, this::y, this::width, this::height, this::color)
+
+};
