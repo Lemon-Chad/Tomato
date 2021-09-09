@@ -72,6 +72,11 @@ bake editorCommands => [
     "enter",
     "tab"
 ];
+bake popupCommands => [
+    "backspace",
+    "enter",
+    "tab"
+];
 recipe Editor -> Box {
     uppercase, code,
     cursorln, cursorcol, realcol,
@@ -120,6 +125,7 @@ recipe Editor -> Box {
 
     method updateTks {
         attr tks => tokens::Tokenizer("<editor>", this::code)::makeTokens();
+        return this;
     }
 
     method draw {
@@ -268,6 +274,76 @@ recipe Editor -> Box {
         }
     }
 
+    method getText -> this::code
+
+};
+
+recipe Popup -> Box {
+    prompt, callback, text, textColor, innerTextColor, innerColor;
+
+    method setPrompt<prompt> {
+        attr prompt => prompt;
+        return this;
+    }
+
+    method setCallback<callback> {
+        attr callback => callback;
+        return this;
+    }
+
+    method create {
+        append(components::comps, this);
+        attr id => random();
+        attr text => "";
+        return this;
+    }
+
+    method setTextColor<textColor, innerColor> { 
+        attr textColor => textColor;
+        attr innerTextColor => innerColor;
+        return this;
+    }
+
+    method onHover<x, y> -> println("Hovering!!!")
+
+    method close {
+        this::callback(this::text);
+        this::destroy();
+    }
+
+    method boxColor<innerColor> { 
+        attr innerColor => innerColor;
+        return this;
+    }
+
+    method draw {
+        awt::drawRect(this::x, this::y - this::height / 2, round(letterSize * size(this::prompt) * 2), round(fontSize * 2.2), this::color);
+        awt::drawRect(this::x, this::y, this::width, this::height, this::color);
+        awt::drawRect(this::x, this::y, this::width - round(letterSize * 2), this::height - round(letterSize * 2), this::innerColor);
+        awt::drawText(this::prompt, this::x - round(letterSize * size(this::prompt) / 2), this::y - this::height / 2, this::textColor);
+        awt::drawText(this::text, this::x - round(letterSize * size(this::text) / 2), this::y, this::innerTextColor);
+    }
+
+    method keyString<keys> {
+        var add => ? awt::keyDown("shift"): strShift(keys) $_: keys;
+        attr text => substr(this::text + add, 0, min(size(this::text) + size(keys), round((this::width - letterSize * 2) / letterSize)));
+    }
+
+    method onKeyTyped<key> {
+        switch (key) {
+            case "enter":
+                this::close();
+                break;
+            case "backspace":
+                if (this::text != "")
+                    attr text => substr(this::text, 0, size(this::text) - 1);
+                break;
+            case "tab":
+                attr text => this::text + "    ";
+                break;
+        };
+    }
+
 };
 
 recipe Button -> Box {
@@ -292,19 +368,23 @@ recipe Button -> Box {
 
     method onFocus<x, y> -> this::onClick(x, y)
 
+    method onHover<x, y> -> attr color => this::hoverColor
+    method onUnhover<x, y> -> attr color => this::idleColor
+
     method onClick<_, _> {
-        attr color => this::idleColor;
         if (this::clickdelay > 0) return null;
         this::callback();
-        attr clickdelay => 50;
+        attr clickdelay => 25;
     }
     method draw {
         setFontSize(this::fontSize);
         attr clickdelay => --this::clickdelay;
-        awt::drawRect(this::x, this::y, this::width, this::height, this::color);
+        awt::drawRect(this::x, this::y, this::width, this::height, ? this::clickdelay > 0: this::activeColor $_: this::color);
         awt::drawText(this::label, round(this::x - size(this::label) * letterSize / 2), round(this::y + fontSize / 2 - 8), this::labelColor);
     }
 };
+
+var savePath => "project.devp";
 
 fn async {
     loop {
@@ -312,13 +392,23 @@ fn async {
     }
 }();
 
-Editor(round(0.2 * width), 45, width * 1.45, height * 1.8, boilerplate, 15, 0)
-    ::create()
-    ::setFontSize(fs * 27)
-    ::updateTks();
+fn updateSave<path> {
+    savePath => path;
+    saveFile();
+}
+
+bake editor => Editor(round(0.2 * width), 45, width * 1.45, height * 1.8, boilerplate, 15, 0)
+                ::create()
+                ::setFontSize(fs * 27)
+                ::updateTks();
+
+fn saveAsFile {
+    if (savePopup == null)
+        newSavePopup();
+}
 
 fn saveFile {
-    println(time::epoch());
+    iofile::writeFile(savePath, editor::getText());
 }
 
 Button(125, 80, 200, 100, [40, 44, 52])
@@ -326,8 +416,29 @@ Button(125, 80, 200, 100, [40, 44, 52])
     ::setFontSize(fs * 45)
     ::setLabelColor([159, 178, 178])
     ::setHoverColor([56, 62, 73])
+    ::setActiveColor([66, 72, 83])
     ::setCallback(saveFile)
     ::setLabel("Save");
+
+Button(125, 180, 200, 100, [40, 44, 52])
+    ::create()
+    ::setFontSize(fs * 45)
+    ::setLabelColor([159, 178, 178])
+    ::setHoverColor([56, 62, 73])
+    ::setActiveColor([66, 72, 83])
+    ::setCallback(saveAsFile)
+    ::setLabel("Save As");
+
+var savePopup => null;
+
+fn newSavePopup {
+    savePopup => Popup(round(width / 2), round(height / 2), 800, 200, [50, 54, 62])
+                    ::boxColor([60, 64, 72])
+                    ::setPrompt("File Path?")
+                    ::setCallback(updateSave)
+                    ::setTextColor([159, 178, 178], [159, 178, 178])
+                    ::create();
+}
 
 <> Main loop
 loop {
@@ -343,7 +454,20 @@ loop {
             }
         }
         focused::keyString(awt::keyString());
+    } elif (type(focused) == "Popup") {
+        for (command <- popupCommands) {
+            if (awt::keyTyped(command)) {
+                focused::onKeyTyped(command);
+            }
+        }
+        focused::keyString(awt::keyString());
     }
+
+
+    var datatext => `Saving to: ${savePath}`;
+    setFontSize(fs * 18);
+    awt::drawText(datatext, 0, this::height - fontSize, [159, 178, 178]);
+    setFontSize(fs * 27);
 
     awt::qUpdate();
     time::halt(5);

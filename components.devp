@@ -9,6 +9,36 @@ fn mouseEvents {
     bake mouse => awt::mousePos();
     bake mouseX => mouse[0]; bake mouseY => mouse[1];
 
+    var hovered;
+    var component;
+    var hoverDone => false;
+    for (i -> 0:size(comps)) {
+        component => comps[size(comps) - i - 1];
+        if (component == focused) {
+            hoverDone => hoverDone | component::isHovered(mouseX, mouseY);
+            continue;
+        }
+
+        hovered => component::isHovered(mouseX, mouseY);
+        if (!component::hovered & hovered & !hoverDone) {
+            component::_onHover(mouseX, mouseY);
+        } elif ((component::hovered & !hovered) | hoverDone) {
+            component::_onUnhover(mouseX, mouseY);
+        }
+
+        if (clicked & component::isClicked(mouseX, mouseY) & !hoverDone) {
+            if (focused != null) {
+                focused::_onUnfocus(mouseX, mouseY);
+            }
+            focused => component;
+            focused::_onFocus(mouseX, mouseY);
+            println(type(focused));
+            hoverDone => true;
+        }
+
+        if (component::hovered & !hoverDone) hoverDone => true;
+    }
+
     if (clicked & focused != null) {
         if (!focused::isClicked(mouseX, mouseY)) {
             focused::_onUnfocus(mouseX, mouseY);
@@ -17,35 +47,28 @@ fn mouseEvents {
             focused::onClick(mouseX, mouseY);
         }
     }
-
-    var hovered;
-    for (component <- comps) {
-        if (component == focused) continue;
-
-        hovered => component::isHovered(mouseX, mouseY);
-        if (!component::hovered & hovered) {
-            component::_onHover(mouseX, mouseY);
-        } elif (component::hovered & !hovered) {
-            component::_onUnhover(mouseX, mouseY);
-        }
-        if (clicked & component::isClicked(mouseX, mouseY)) {
-            focused => component;
-            focused::_onFocus(mouseX, mouseY);
-            break;
-        }
-    }
 }
 
 fn getFocused -> focused;
 
 recipe Component {
-    hovered, focused;
+    hovered, focused, id;
 
     method create {
         attr hovered => false;
         attr focused => false;
+        attr id => random();
         append(comps, this);
         return this;
+    }
+
+    method destroy {
+        comps /= this;
+    }
+
+    method bin eq<o> {
+        if (o == null) return false;
+        return this::id == o::id;
     }
 
     method isClicked<x, y> -> false
